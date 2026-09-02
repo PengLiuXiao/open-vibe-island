@@ -5,6 +5,31 @@ import Testing
 struct ZCodeHooksTests {
     private let command = ZCodeHookInstaller.processCommand(for: "/opt/open-island/OpenIslandHooks")
 
+    @Test
+    func workspaceHookPayloadWithZCodeYoloPermissionModeDecodes() throws {
+        // Captured verbatim from a trusted ZCode.app workspace hook (2026-09-02):
+        // ZCode reports its own permission mode name "yolo", which is not part of
+        // Claude's vocabulary. The payload must still decode instead of failing open.
+        let json = """
+        {
+          "cwd": "/private/tmp/island-probe",
+          "hookEventName": "SessionStart",
+          "mode": "yolo",
+          "sessionId": "sess_55870ce8-4c69-4324-8dc2-000f8e4efb1a",
+          "source": "startup",
+          "hook_event_name": "SessionStart",
+          "permission_mode": "yolo",
+          "session_id": "sess_55870ce8-4c69-4324-8dc2-000f8e4efb1a",
+          "transcript_path": "/tmp/transcript.jsonl"
+        }
+        """
+        let payload = try JSONDecoder().decode(ClaudeHookPayload.self, from: Data(json.utf8))
+        #expect(payload.hookEventName == .sessionStart)
+        #expect(payload.permissionMode == .yolo)
+        #expect(payload.sessionID == "sess_55870ce8-4c69-4324-8dc2-000f8e4efb1a")
+    }
+
+
     private func hookEntry(in json: [String: Any], event: String) -> [String: Any]? {
         guard let hooks = json["hooks"] as? [String: Any],
               let events = hooks["events"] as? [String: Any],
