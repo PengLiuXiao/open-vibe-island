@@ -33,6 +33,13 @@ final class ProcessMonitoringCoordinator {
     @ObservationIgnored
     var onCodexAppMaintenanceTick: (() -> Void)?
 
+    /// Fires on each full reconcile while ZCode session processes exist,
+    /// carrying their working directories. The ZCode workspace hooks
+    /// coordinator uses this to detect workspaces needing a managed
+    /// `zcode.json` (see `docs/adr/0001`).
+    @ObservationIgnored
+    var onZcodeWorkspacesObserved: ((_ workingDirectories: Set<String>) -> Void)?
+
     @ObservationIgnored
     let activeAgentProcessDiscovery = ActiveAgentProcessDiscovery()
 
@@ -212,6 +219,15 @@ final class ProcessMonitoringCoordinator {
         observedCodexAppRunning: Bool? = nil
     ) {
         let activeProcesses = activeProcesses ?? activeAgentProcessDiscovery.discover()
+
+        let zcodeWorkingDirectories = Set(
+            activeProcesses
+                .filter { $0.tool == .zcode }
+                .compactMap(\.workingDirectory)
+        )
+        if !zcodeWorkingDirectories.isEmpty {
+            onZcodeWorkspacesObserved?(zcodeWorkingDirectories)
+        }
 
         // Work on a local copy to avoid triggering didSet (and its queue.sync +
         // view invalidation) on every intermediate mutation.

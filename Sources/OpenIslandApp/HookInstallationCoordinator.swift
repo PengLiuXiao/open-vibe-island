@@ -43,6 +43,12 @@ final class HookInstallationCoordinator {
     @ObservationIgnored
     var onStatusMessage: ((String) -> Void)?
 
+    /// Fired after ZCode hooks are uninstalled so the caller also removes
+    /// every managed workspace `zcode.json` recorded in the managed writes
+    /// registry (see `docs/adr/0001`).
+    @ObservationIgnored
+    var onZcodeWorkspaceCleanup: (() -> Void)?
+
     @ObservationIgnored
     private let codexHookInstallationManager = CodexHookInstallationManager()
 
@@ -1369,6 +1375,9 @@ final class HookInstallationCoordinator {
                     self.onStatusMessage?("ZCode hooks are installed. Sessions started afterwards will report to the island.")
                 } else {
                     self.onStatusMessage?("ZCode hooks are not installed.")
+                    // Disabling ZCode support also reverts every managed
+                    // workspace write (registry-driven wholesale cleanup).
+                    self.onZcodeWorkspaceCleanup?()
                 }
             } catch {
                 self.onStatusMessage?("ZCode hook update failed: \(error.localizedDescription)")
