@@ -21,3 +21,11 @@ _Avoid_: install, inject
 **Managed writes registry**:
 The authoritative record of every managed write, consumed wholesale by disable/uninstall cleanup.
 _Avoid_: tracking table, write log
+
+**Workspace root**:
+The first ancestor of a session's working directory that contains `.git`, or the working directory itself when none does — where ZCode's workspace config discovery stops and collects from.
+_Avoid_: repo root, project root
+
+**Trust grant**:
+ZCode's persisted approval binding a workspace identity to a hook declaration digest; any later change to the declaration invalidates the grant (stale digest).
+_Avoid_: whitelist entry, approval
