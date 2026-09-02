@@ -2,6 +2,9 @@ import Foundation
 
 public typealias ClaudeHookJSONValue = CodexHookJSONValue
 
+/// Permission-mode vocabulary shared by every Claude-compatible agent that feeds
+/// hook payloads; non-Claude agents extend it with their own mode names
+/// (`dontAsk`/`auto`/`yolo` — ZCode reports `yolo` for its auto-approve mode).
 public enum ClaudePermissionMode: String, Codable, Sendable {
     case `default`
     case acceptEdits
@@ -9,6 +12,7 @@ public enum ClaudePermissionMode: String, Codable, Sendable {
     case dontAsk
     case bypassPermissions
     case auto
+    case yolo
 }
 
 public enum ClaudePermissionBehavior: String, Codable, Sendable {
@@ -158,7 +162,7 @@ public enum ClaudePermissionUpdate: Equatable, Codable, Sendable {
             switch mode {
             case .acceptEdits:
                 return "Yes, manually approve edits"
-            case .bypassPermissions, .dontAsk:
+            case .bypassPermissions, .dontAsk, .yolo:
                 return "Yes, and bypass permissions"
             case .plan:
                 return "Plan Mode"
