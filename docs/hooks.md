@@ -375,10 +375,38 @@ only terminal CLI sessions load user-config hooks. A live probe (fresh
 app session, real prompt, `process`-type entries) produced no hook
 executions and no Open Island session. The app surfaces its own
 workspace-hook mechanism (project `zcode.json` / `.zcode/config.json` with
-an in-app trust review) instead. Until Open Island adopts that mechanism,
-ZCode coverage via hooks is terminal-session-only; ZCode.app windows remain
-covered by process discovery only while their CLI has a TTY (which app
-sessions do not).
+an in-app trust review) instead.
+
+### Workspace hooks (`zcode.json`)
+
+Open Island adopts that workspace mechanism for app sessions
+([ADR 0001](adr/0001-zcode-workspace-hooks-managed-zcode-json.md)). When
+process monitoring sees a ZCode session process, its working directory is
+resolved to a workspace root (first `.git` ancestor, mirroring ZCode's own
+config discovery) and the user is asked once per workspace whether to
+enable monitoring. On confirm, Open Island writes a managed `zcode.json`
+at the root — same four lifecycle events as the user-level install, same
+`process`-type entries — and appends a local-only exclude line
+(`.git/info/exclude`) because the hook command embeds a machine-specific
+absolute path.
+
+ZCode gates workspace hooks behind a per-workspace trust digest keyed on
+the full declaration (command, args, timeouts, positions). Consequences:
+
+- The file is deliberately **write-once**: while an install is current it
+  is never rewritten, and status checks match the expected binary path
+  exactly. Only a drifted managed command (moved binary) or a missing
+  file triggers a rewrite — which invalidates the trust and re-surfaces
+  the guide ("Settings → Hooks → Workspace"; the review prompt does not
+  reliably reappear on its own). User-edited configs are left untouched.
+- Disabling ZCode support removes every managed write via the managed
+  writes registry (`zcode-workspace-writes.json` in Application Support);
+  orphaned trust grants inside ZCode are inert without the config file.
+- Residual risk (accepted, ADR 0001): if a future ZCode release makes app
+  sessions load user-config hooks alongside workspace hooks, lifecycle
+  events would be reported twice. No duplicate-event defense is built —
+  code inspection (2026-09-02) found terminal sessions never register
+  workspace hooks and app sessions never ran user-config hooks.
 
 ---
 

@@ -69,9 +69,13 @@ struct ActiveAgentProcessDiscovery {
         for process in processes {
             // Most agent detection requires a TTY (terminal-attached process).
             // OpenCode is an exception: it can run inside IDE integrated terminals
-            // that don't expose a TTY in `ps` output. Let OpenCode processes
-            // through so the liveness fallback can keep their sessions alive.
-            if process.terminalTTY == nil && !isOpenCodeProcess(command: process.command) {
+            // that don't expose a TTY in `ps` output. ZCode is another: sessions
+            // driven by ZCode.app run as TTY-less subprocesses whose cwd is the
+            // workspace — needed both for session liveness and for workspace
+            // hooks detection (see docs/adr/0001).
+            if process.terminalTTY == nil
+                && !isOpenCodeProcess(command: process.command)
+                && !isZcodeProcess(command: process.command) {
                 continue
             }
 

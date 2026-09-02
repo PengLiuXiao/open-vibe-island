@@ -70,6 +70,7 @@ final class AppModel {
     let monitoring = ProcessMonitoringCoordinator()
     let codexAppServer = CodexAppServerCoordinator()
     let updateChecker = UpdateChecker()
+    let zcodeWorkspaceHooks = ZCodeWorkspaceHooksCoordinator()
 
     var notchStatus: NotchStatus {
         get { overlay.notchStatus }
@@ -700,6 +701,28 @@ final class AppModel {
         hooks.onStatusMessage = { [weak self] message in
             self?.lastActionMessage = message
         }
+        hooks.onZcodeWorkspaceCleanup = { [weak self] in
+            self?.zcodeWorkspaceHooks.uninstallAllManagedWrites()
+        }
+
+        zcodeWorkspaceHooks.onStatusMessage = { [weak self] message in
+            self?.lastActionMessage = message
+        }
+        zcodeWorkspaceHooks.onTrustGuideNeeded = { [weak self] workspaceRoot in
+            self?.lastActionMessage = "ZCode workspace config written for \(workspaceRoot.lastPathComponent) — "
+                + ZCodeWorkspaceHooksCoordinator.trustGuideText(workspaceName: workspaceRoot.lastPathComponent)
+        }
+        zcodeWorkspaceHooks.onPromptAvailable = { [weak self] prompt in
+            self?.presentZcodeWorkspacePrompt(prompt)
+        }
+
+        monitoring.onZcodeWorkspacesObserved = { [weak self] workingDirectories in
+            guard let self else { return }
+            self.zcodeWorkspaceHooks.observeZcodeProcessWorkingDirectories(
+                workingDirectories,
+                hooksBinaryURL: self.hooksBinaryURL
+            )
+        }
 
         discovery.syntheticClaudeSessionPrefix = Self.syntheticClaudeSessionPrefix
         discovery.onStatusMessage = { [weak self] message in
@@ -767,6 +790,26 @@ final class AppModel {
         refreshOverlayDisplayConfiguration()
         syncSleepPrevention()
         hasFinishedInit = true
+    }
+
+    // MARK: - ZCode workspace hooks
+
+    /// First-time confirmation for a newly observed ZCode workspace (one
+    /// dialog per workspace; the coordinator suppresses repeats).
+    private func presentZcodeWorkspacePrompt(_ prompt: ZCodeWorkspaceHooksCoordinator.WorkspacePrompt) {
+        Task { @MainActor in
+            let alert = NSAlert()
+            alert.messageText = "Enable ZCode workspace monitoring?"
+            alert.informativeText =
+                "Open Island will add a git-excluded zcode.json to “\(prompt.workspaceName)” so ZCode.app sessions report to the island. "
+                + ZCodeWorkspaceHooksCoordinator.trustGuideText(workspaceName: prompt.workspaceName)
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "Enable")
+            alert.addButton(withTitle: "Not Now")
+            NSApp.activate(ignoringOtherApps: true)
+            let response = alert.runModal()
+            zcodeWorkspaceHooks.answerPrompt(response == .alertFirstButtonReturn)
+        }
     }
 
     var sessions: [AgentSession] {
