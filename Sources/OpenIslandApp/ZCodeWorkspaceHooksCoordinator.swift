@@ -34,25 +34,32 @@ final class ZCodeWorkspaceHooksCoordinator {
     @ObservationIgnored
     var onPromptAvailable: ((_ prompt: WorkspacePrompt) -> Void)?
 
-    /// Presented to the user (one workspace at a time). Rendered by the app
-    /// layer as a confirmation dialog; cleared by ``answerPrompt(_:)``.
+    /// Presented to the user (one workspace at a time). Cleared by
+    /// ``answerPrompt(_:)``.
     var pendingPrompt: WorkspacePrompt?
 
-    /// The managed hooks binary the workspace configs should point at.
-    /// Mirrors `HookInstallationCoordinator.hooksBinaryURL` and is set
-    /// during app wiring.
-    var hooksBinaryURL: URL?
+    /// Managed-command (`processCommand(for:)`) from the latest observation
+    /// pass; kept so ``answerPrompt(_:)`` can install immediately.
+    @ObservationIgnored
+    private var lastHookCommand: String?
 
     @ObservationIgnored
     private let store: ZCodeWorkspaceManagedWritesStore
     @ObservationIgnored
     private let controller: ZCodeWorkspaceHooksController
+    /// Roots already surfaced this run — suppression for "Not Now".
     @ObservationIgnored
     private var surfacedPromptRoots: Set<String> = []
 
     init(store: ZCodeWorkspaceManagedWritesStore = ZCodeWorkspaceManagedWritesStore(storeURL: ZCodeWorkspaceManagedWritesStore.defaultURL())) {
         self.store = store
         self.controller = ZCodeWorkspaceHooksController(store: store)
+    }
+
+    /// The trust guidance shown after every write or repair. Centralized so
+    /// the confirmation dialog and the status line cannot drift apart.
+    static func trustGuideText(workspaceName: String) -> String {
+        "Approve it once in ZCode under Settings → Hooks → Workspace (\(workspaceName))."
     }
 
     /// Called from process monitoring with the working directory of every
@@ -62,6 +69,7 @@ final class ZCodeWorkspaceHooksCoordinator {
             return
         }
         let hookCommand = ZCodeHookInstaller.processCommand(for: hooksBinaryURL.path)
+        lastHookCommand = hookCommand
         let store = self.store
         let controller = self.controller
 
@@ -72,17 +80,20 @@ final class ZCodeWorkspaceHooksCoordinator {
                 controller.reconcile(observedWorkspaceCWDs: workingDirectories, hookCommand: hookCommand)
             }.value
 
-            // Managed roots are verified against disk every pass: a deleted
-            // or user-edited config (or a moved hook binary) drifts from the
-            // registry and triggers a rewrite — which also invalidates the
-            // ZCode trust digest, so the guide reappears.
+            // Managed roots are assessed against disk every pass, but only
+            // a drifted managed command (binary moved) or a missing file
+            // rewrites — any rewrite invalidates ZCode's trust digest, so
+            // user-edited configs are left untouched (ADR 0001).
             for root in plan.managedRoots where store.decision(forRoot: root.path) == .enabled {
-                let status = await Task.detached(priority: .utility) {
-                    ZCodeWorkspaceConfigWriter.status(workspaceRoot: root, hookCommand: hookCommand)
+                let assessment = await Task.detached(priority: .utility) {
+                    ZCodeWorkspaceConfigWriter.assess(workspaceRoot: root, hookCommand: hookCommand)
                 }.value
-                if status != .current {
+                switch assessment {
+                case .absent, .needsRewrite:
                     controller.markNeedsRepair(workspaceRoot: root)
                     plan.installRoots.append(root)
+                case .current, .userModified:
+                    continue
                 }
             }
 
@@ -111,16 +122,16 @@ final class ZCodeWorkspaceHooksCoordinator {
 
         if confirmed {
             controller.confirm(workspaceRoot: prompt.workspaceRoot)
-            guard let hooksBinaryURL else {
+            guard let hookCommand = lastHookCommand else {
                 return
             }
-            let hookCommand = ZCodeHookInstaller.processCommand(for: hooksBinaryURL.path)
             Task { [weak self] in
                 await self?.performInstalls(roots: [prompt.workspaceRoot], hookCommand: hookCommand)
             }
         } else {
             controller.decline(workspaceRoot: prompt.workspaceRoot)
-            onStatusMessage?("Skipped workspace monitoring for \(prompt.workspaceName). Ask again after restarting Open Island.")
+            surfacedPromptRoots.insert(prompt.workspaceRoot.path)
+            onStatusMessage?("Skipped ZCode workspace monitoring for \(prompt.workspaceName). It will be offered again next launch.")
         }
     }
 
@@ -153,19 +164,29 @@ final class ZCodeWorkspaceHooksCoordinator {
         }
 
         for root in roots {
-            let outcome = await Task.detached(priority: .utility) {
+            // `nil` means the install threw (permissions, invalid JSON in a
+            // user-owned file): leave the root unrecorded so the next pass
+            // retries instead of silently claiming success.
+            let installOutcome = await Task.detached(priority: .utility) {
                 try? ZCodeWorkspaceConfigWriter.install(workspaceRoot: root, hookCommand: hookCommand)
             }.value
+            guard let outcome = installOutcome else {
+                onStatusMessage?("Could not write the ZCode workspace config for \(root.lastPathComponent).")
+                continue
+            }
 
-            self.store.record(entry: ZCodeWorkspaceManagedWriteEntry(
+            let hasGitDirectory = FileManager.default.fileExists(
+                atPath: root.appendingPathComponent(".git").path
+            )
+            store.record(entry: ZCodeWorkspaceManagedWriteEntry(
                 rootPath: root.path,
                 hookCommand: hookCommand,
-                excludeAdded: true
+                excludeAdded: hasGitDirectory
             ))
-            self.controller.markInstalled(workspaceRoot: root)
-            self.onTrustGuideNeeded?(root)
+            controller.markInstalled(workspaceRoot: root)
+            onTrustGuideNeeded?(root)
             let verb = outcome == .installed ? "Enabled" : "Verified"
-            self.onStatusMessage?("\(verb) ZCode workspace monitoring for \(root.lastPathComponent).")
+            onStatusMessage?("\(verb) ZCode workspace monitoring for \(root.lastPathComponent).")
         }
     }
 }

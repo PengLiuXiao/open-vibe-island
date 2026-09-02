@@ -90,6 +90,10 @@ public enum ZCodeHookInstaller {
         ("PermissionRequest", "*", managedInteractiveTimeoutMs),
     ]
 
+    /// The lifecycle events a managed install covers, in spec order —
+    /// the single source shared by user-config and workspace installs.
+    public static let managedEventNames: [String] = eventSpecs.map(\.name)
+
     /// The `command` value of a managed `process`-type entry: the bare
     /// executable path. Unlike the legacy shell-quoted `command`-type form,
     /// no quoting is applied — the path and arguments travel as separate

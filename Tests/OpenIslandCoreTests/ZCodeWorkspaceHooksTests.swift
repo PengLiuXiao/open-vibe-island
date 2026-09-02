@@ -178,17 +178,24 @@ struct ZCodeWorkspaceHooksTests {
     }
 
     @Test
-    func controllerNeverPromptsForDeclinedRoot() throws {
-        let controller = ZCodeWorkspaceHooksController(store: inMemoryStore())
+    func controllerOffersDeclinedRootAgainForNextLaunch() throws {
+        // "Not Now" only suppresses for the current run (coordinator-side
+        // surfaced set); the controller clears the decision so the workspace
+        // is re-offered after a restart.
+        let store = inMemoryStore()
+        let controller = ZCodeWorkspaceHooksController(store: store)
         let cwd = try workspaceWithGit()
+        let hookCommand = "/opt/hooks/OpenIslandHooks"
 
-        let first = controller.reconcile(observedWorkspaceCWDs: [cwd.path], hookCommand: "/opt/hooks/OpenIslandHooks")
+        let first = controller.reconcile(observedWorkspaceCWDs: [cwd.path], hookCommand: hookCommand)
         #expect(first.pendingConfirmationRoots.count == 1)
         controller.decline(workspaceRoot: cwd)
+        #expect(store.decision(forRoot: cwd.standardizedFileURL.path) == nil)
 
-        let second = controller.reconcile(observedWorkspaceCWDs: [cwd.path], hookCommand: "/opt/hooks/OpenIslandHooks")
-        #expect(second.pendingConfirmationRoots.isEmpty)
-        #expect(second.installRoots.isEmpty)
+        // A fresh run (new controller, same persisted store) re-offers.
+        let relaunched = ZCodeWorkspaceHooksController(store: store)
+        let second = relaunched.reconcile(observedWorkspaceCWDs: [cwd.path], hookCommand: hookCommand)
+        #expect(second.pendingConfirmationRoots.count == 1)
     }
 
     @Test
@@ -220,6 +227,33 @@ struct ZCodeWorkspaceHooksTests {
         controller.markNeedsRepair(workspaceRoot: cwd)
         let plan = controller.reconcile(observedWorkspaceCWDs: [cwd.path], hookCommand: hookCommand)
         #expect(plan.installRoots.count == 1)
+    }
+
+    @Test
+    func assessDistinguishesBinaryDriftFromUserEdits() throws {
+        let root = try workspaceWithGit()
+        let hookCommand = "/opt/hooks/OpenIslandHooks"
+        _ = try ZCodeWorkspaceConfigWriter.install(workspaceRoot: root, hookCommand: hookCommand)
+
+        // Missing file → rewrite is safe (nothing trusted is lost).
+        try FileManager.default.removeItem(at: root.appendingPathComponent("zcode.json"))
+        #expect(ZCodeWorkspaceConfigWriter.assess(workspaceRoot: root, hookCommand: hookCommand) == .absent)
+
+        // Drifted managed command (binary moved) → rewrite migrates + re-trust.
+        _ = try ZCodeWorkspaceConfigWriter.install(workspaceRoot: root, hookCommand: "/opt/hooks/OpenIslandHooks-moved")
+        #expect(ZCodeWorkspaceConfigWriter.assess(workspaceRoot: root, hookCommand: hookCommand) == .needsRewrite)
+
+        // User-owned config with no managed entries → hands off.
+        let foreign = try workspaceWithGit()
+        let foreignJSON = """
+        { "hooks": { "enabled": true, "events": { "SessionStart": [ { "hooks": [ { "type": "process", "command": "/usr/local/bin/notify-me" } ] } ] } } }
+        """
+        try foreignJSON.data(using: .utf8)!.write(to: foreign.appendingPathComponent("zcode.json"))
+        #expect(ZCodeWorkspaceConfigWriter.assess(workspaceRoot: foreign, hookCommand: hookCommand) == .userModified)
+
+        // Current install → untouched.
+        _ = try ZCodeWorkspaceConfigWriter.install(workspaceRoot: foreign, hookCommand: hookCommand)
+        #expect(ZCodeWorkspaceConfigWriter.assess(workspaceRoot: foreign, hookCommand: hookCommand) == .current)
     }
 
     // MARK: - Helpers

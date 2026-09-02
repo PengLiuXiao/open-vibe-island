@@ -167,6 +167,72 @@ public enum ZCodeWorkspaceConfigWriter {
         case absent
     }
 
+    /// Finer-grained than ``Status`` for the repair loop: only a drifted
+    /// managed command (binary moved) or a missing file justifies a
+    /// rewrite, because any rewrite invalidates the ZCode trust digest.
+    /// User edits to unrelated parts of the config are left alone.
+    public enum RepairAssessment: Equatable, Sendable {
+        case current
+        /// No config on disk — write one (nothing trusted is lost).
+        case absent
+        /// Managed entries exist but their command differs from the
+        /// expected binary path — rewrite migrates them, re-trust needed.
+        case needsRewrite
+        /// No managed entries for this binary and no drifted ones either —
+        /// treat as user-owned content; do not touch.
+        case userModified
+    }
+
+    public static func assess(workspaceRoot: URL, hookCommand: String) -> RepairAssessment {
+        let configURL = workspaceRoot.appendingPathComponent(configFileName)
+        guard let existingData = try? Data(contentsOf: configURL) else {
+            return .absent
+        }
+        if status(existingData: existingData, hookCommand: hookCommand) == .current {
+            return .current
+        }
+
+        // Drifted managed entries carry our `--source zcode` arguments on a
+        // different OpenIslandHooks path (moved binary, older install).
+        let hasDriftedManagedEntry = containsManagedHook(existingData: existingData, expectedCommand: nil)
+        return hasDriftedManagedEntry ? .needsRewrite : .userModified
+    }
+
+    /// `true` when any lifecycle event carries a managed-shape hook entry
+    /// (process type, `--source zcode` args, OpenIslandHooks command).
+    /// With `expectedCommand` the command must additionally match it
+    /// exactly; `nil` accepts any managed-shape command.
+    private static func containsManagedHook(existingData: Data?, expectedCommand: String?) -> Bool {
+        guard let existingData,
+              let rootObject = try? JSONSerialization.jsonObject(with: existingData) as? [String: Any],
+              let hooksObject = rootObject["hooks"] as? [String: Any],
+              let eventsObject = hooksObject["events"] as? [String: Any] else {
+            return false
+        }
+
+        for eventName in ZCodeHookInstaller.managedEventNames {
+            let groups = eventsObject[eventName] as? [[String: Any]] ?? []
+            for group in groups {
+                let hooks = group["hooks"] as? [[String: Any]] ?? []
+                for hook in hooks where hook["type"] as? String == "process" {
+                    let command = hook["command"] as? String ?? ""
+                    guard (hook["args"] as? [String]) == ZCodeHookInstaller.managedHookArguments,
+                          command.lowercased().contains("openislandhooks") else {
+                        continue
+                    }
+                    if let expectedCommand {
+                        if command == expectedCommand {
+                            return true
+                        }
+                        continue
+                    }
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
     @discardableResult
     public static func install(workspaceRoot: URL, hookCommand: String) throws -> InstallOutcome {
         let configURL = workspaceRoot.appendingPathComponent(configFileName)
@@ -202,7 +268,7 @@ public enum ZCodeWorkspaceConfigWriter {
             return .absent
         }
 
-        let eventNames = ["SessionStart", "UserPromptSubmit", "Stop", "PermissionRequest"]
+        let eventNames = ZCodeHookInstaller.managedEventNames
         let allCurrent = eventNames.allSatisfy { eventName in
             let groups = eventsObject[eventName] as? [[String: Any]] ?? []
             return groups.contains { group in
@@ -243,8 +309,6 @@ public enum ZCodeWorkspaceDecision: String, Codable, Sendable, Equatable {
     case pending
     /// User confirmed (or a prior install exists): manage writes silently.
     case enabled
-    /// User declined: never prompt again for this workspace.
-    case disabled
 }
 
 public struct ZCodeWorkspaceManagedWriteEntry: Codable, Equatable, Sendable {
@@ -305,6 +369,16 @@ public final class ZCodeWorkspaceManagedWritesStore: @unchecked Sendable {
     public func setDecision(_ decision: ZCodeWorkspaceDecision, forRoot rootPath: String) {
         lock.lock()
         document.decisions[rootPath] = decision
+        let snapshot = document
+        lock.unlock()
+        persist(snapshot)
+    }
+
+    /// Clears a workspace's decision so it is treated as unseen again
+    /// (used by "Not Now": the workspace is re-offered on next launch).
+    public func clearDecision(forRoot rootPath: String) {
+        lock.lock()
+        document.decisions[rootPath] = nil
         let snapshot = document
         lock.unlock()
         persist(snapshot)
@@ -405,8 +479,6 @@ public final class ZCodeWorkspaceHooksController: @unchecked Sendable {
         for root in roots {
             let key = root.path
             switch store.decision(forRoot: key) {
-            case .disabled:
-                continue
             case .enabled:
                 lock.lock()
                 let isInstalled = installedRoots.contains(key)
@@ -441,8 +513,11 @@ public final class ZCodeWorkspaceHooksController: @unchecked Sendable {
         store.setDecision(.enabled, forRoot: workspaceRoot.standardizedFileURL.path)
     }
 
+    /// "Not Now": clears the decision so the workspace is offered again on
+    /// a future launch. In-session suppression is the caller's concern
+    /// (the app coordinator only surfaces each root once per run).
     public func decline(workspaceRoot: URL) {
-        store.setDecision(.disabled, forRoot: workspaceRoot.standardizedFileURL.path)
+        store.clearDecision(forRoot: workspaceRoot.standardizedFileURL.path)
     }
 
     public func markInstalled(workspaceRoot: URL) {

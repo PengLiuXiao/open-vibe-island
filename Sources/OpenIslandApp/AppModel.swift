@@ -709,7 +709,8 @@ final class AppModel {
             self?.lastActionMessage = message
         }
         zcodeWorkspaceHooks.onTrustGuideNeeded = { [weak self] workspaceRoot in
-            self?.lastActionMessage = "ZCode workspace config written for \(workspaceRoot.lastPathComponent) — approve it once in ZCode under Settings → Hooks → Workspace."
+            self?.lastActionMessage = "ZCode workspace config written for \(workspaceRoot.lastPathComponent) — "
+                + ZCodeWorkspaceHooksCoordinator.trustGuideText(workspaceName: workspaceRoot.lastPathComponent)
         }
         zcodeWorkspaceHooks.onPromptAvailable = { [weak self] prompt in
             self?.presentZcodeWorkspacePrompt(prompt)
@@ -719,7 +720,7 @@ final class AppModel {
             guard let self else { return }
             self.zcodeWorkspaceHooks.observeZcodeProcessWorkingDirectories(
                 workingDirectories,
-                hooksBinaryURL: self.hooks.hooksBinaryURL
+                hooksBinaryURL: self.hooksBinaryURL
             )
         }
 
@@ -801,7 +802,7 @@ final class AppModel {
             alert.messageText = "Enable ZCode workspace monitoring?"
             alert.informativeText =
                 "Open Island will add a git-excluded zcode.json to “\(prompt.workspaceName)” so ZCode.app sessions report to the island. "
-                + "Approve it once inside ZCode under Settings → Hooks → Workspace."
+                + ZCodeWorkspaceHooksCoordinator.trustGuideText(workspaceName: prompt.workspaceName)
             alert.alertStyle = .informational
             alert.addButton(withTitle: "Enable")
             alert.addButton(withTitle: "Not Now")
