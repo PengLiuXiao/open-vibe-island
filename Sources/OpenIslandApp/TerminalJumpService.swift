@@ -359,6 +359,21 @@ struct TerminalJumpService {
                 // per-session deep link, so just bring the app forward.
                 try openAction(["-b", "com.anthropic.claudefordesktop"])
                 return "Activated Claude."
+            case "dev.zcode.app":
+                // ZCode.app has no per-conversation deep link either, but its
+                // own Finder integration routes workspace opens through the
+                // `zcode://workspace/open` URL scheme, which activates the
+                // app AND focuses the workspace holding the conversation.
+                // The generic file-open path (`open -b <id> <dir>`) is broken
+                // in ZCode — it dumps the path into the app's search field.
+                if let workingDirectory = target.workingDirectory,
+                   FileManager.default.fileExists(atPath: workingDirectory),
+                   let encoded = Self.urlQueryEncodedPath(workingDirectory) {
+                    try openAction(["zcode://workspace/open?path=\(encoded)"])
+                    return "Focused the ZCode workspace."
+                }
+                try openAction(["-b", "dev.zcode.app"])
+                return "Activated ZCode."
             case "com.googlecode.iterm2":
                 if try jumpToITermSession(target) {
                     return "Focused the matching iTerm session."
@@ -1211,6 +1226,13 @@ struct TerminalJumpService {
         preferredName
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
+    }
+
+    /// JavaScript `encodeURIComponent` semantics (everything but the RFC 3986
+    /// unreserved set percent-encoded), matching what ZCode's own Finder
+    /// integration produces for `zcode://workspace/open?path=…`.
+    private static func urlQueryEncodedPath(_ path: String) -> String? {
+        path.addingPercentEncoding(withAllowedCharacters: CharacterSet(charactersIn: "-._~"))
     }
 
     private func isInstalled(descriptor: TerminalAppDescriptor) -> Bool {

@@ -515,6 +515,67 @@ struct TerminalJumpServiceTests {
         #expect(processInvocations.values.first?.0 == "trae")
         #expect(processInvocations.values.first?.1 == ["-r", "/Users/test/open-vibe-island"])
     }
+
+    @Test
+    func zcodeJumpRoutesWorkspaceThroughURLScheme() throws {
+        let workspace = FileManager.default.temporaryDirectory
+            .appendingPathComponent("zcode-jump-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: workspace) }
+
+        let openedArguments = OpenedArgumentsBox()
+        let service = TerminalJumpService(
+            applicationResolver: { bundleIdentifier in
+                bundleIdentifier == "dev.zcode.app" ? URL(fileURLWithPath: "/Applications/ZCode.app") : nil
+            },
+            appRunningChecker: { bundleIdentifier in bundleIdentifier == "dev.zcode.app" },
+            openAction: { arguments in
+                openedArguments.values.append(arguments)
+            },
+            appleScriptRunner: { _ in "" }
+        )
+
+        let result = try service.jump(
+            to: JumpTarget(
+                terminalApp: "ZCode.app",
+                workspaceName: workspace.lastPathComponent,
+                paneTitle: "ZCode demo",
+                workingDirectory: workspace.path
+            )
+        )
+
+        let expectedPath = workspace.path
+            .addingPercentEncoding(withAllowedCharacters: CharacterSet(charactersIn: "-._~"))!
+        #expect(result == "Focused the ZCode workspace.")
+        #expect(openedArguments.values == [["zcode://workspace/open?path=\(expectedPath)"]])
+    }
+
+    @Test
+    func zcodeJumpWithoutExistingWorkspaceActivatesAppOnly() throws {
+        let openedArguments = OpenedArgumentsBox()
+        let service = TerminalJumpService(
+            applicationResolver: { bundleIdentifier in
+                bundleIdentifier == "dev.zcode.app" ? URL(fileURLWithPath: "/Applications/ZCode.app") : nil
+            },
+            appRunningChecker: { bundleIdentifier in bundleIdentifier == "dev.zcode.app" },
+            openAction: { arguments in
+                openedArguments.values.append(arguments)
+            },
+            appleScriptRunner: { _ in "" }
+        )
+
+        let result = try service.jump(
+            to: JumpTarget(
+                terminalApp: "ZCode.app",
+                workspaceName: "open-vibe-island",
+                paneTitle: "ZCode demo",
+                workingDirectory: "/nonexistent/has/been/deleted"
+            )
+        )
+
+        #expect(result == "Activated ZCode.")
+        #expect(openedArguments.values == [["-b", "dev.zcode.app"]])
+    }
 }
 
 final class ReadSequenceBox: @unchecked Sendable {
