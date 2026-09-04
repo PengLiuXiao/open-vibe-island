@@ -517,12 +517,10 @@ struct TerminalJumpServiceTests {
     }
 
     @Test
-    func zcodeJumpRoutesWorkspaceThroughURLScheme() throws {
-        let workspace = FileManager.default.temporaryDirectory
-            .appendingPathComponent("zcode-jump-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: workspace) }
-
+    func zcodeJumpAlwaysActivatesWithoutURLScheme() throws {
+        // The zcode://workspace/open route (#13) was reverted: it pops a
+        // folder-trust confirmation for unrecognized paths and behaves
+        // inconsistently otherwise. ZCode jumps activate the app only.
         let openedArguments = OpenedArgumentsBox()
         let service = TerminalJumpService(
             applicationResolver: { bundleIdentifier in
@@ -535,6 +533,11 @@ struct TerminalJumpServiceTests {
             appleScriptRunner: { _ in "" }
         )
 
+        let workspace = FileManager.default.temporaryDirectory
+            .appendingPathComponent("zcode-jump-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: workspace) }
+
         let result = try service.jump(
             to: JumpTarget(
                 terminalApp: "ZCode.app",
@@ -544,10 +547,8 @@ struct TerminalJumpServiceTests {
             )
         )
 
-        let expectedPath = workspace.path
-            .addingPercentEncoding(withAllowedCharacters: CharacterSet(charactersIn: "-._~"))!
-        #expect(result == "Focused the ZCode workspace.")
-        #expect(openedArguments.values == [["zcode://workspace/open?path=\(expectedPath)"]])
+        #expect(result == "Activated ZCode.")
+        #expect(openedArguments.values == [["-b", "dev.zcode.app"]])
     }
 
     @Test
