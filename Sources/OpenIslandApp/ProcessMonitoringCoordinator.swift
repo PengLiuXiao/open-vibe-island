@@ -1348,6 +1348,7 @@ final class ProcessMonitoringCoordinator {
 
         var sessions = localState.sessions
         var changed = false
+        var claimedSessionIDs: Set<String> = []
 
         for process in antigravityProcesses {
             guard let processCWD = normalizedPathForMatching(process.workingDirectory) else { continue }
@@ -1355,22 +1356,43 @@ final class ProcessMonitoringCoordinator {
             let hasProcessTerminalApp = !(process.terminalApp ?? "").isEmpty
             guard hasProcessTTY || hasProcessTerminalApp else { continue }
 
+            let pseudoTerminalSession = { (index: Int) -> Bool in
+                let session = sessions[index]
+                guard session.tool == .antigravity,
+                      !session.isDemoSession,
+                      !claimedSessionIDs.contains(session.id),
+                      let jumpTarget = session.jumpTarget,
+                      jumpTarget.terminalApp.lowercased() == "antigravity" else {
+                    return false
+                }
+                return true
+            }
+
             // Mirror the liveness matcher: at most one session per process,
             // preferring the most recently updated workspace candidate.
-            guard let index = sessions.indices
-                .filter({ index in
-                    let session = sessions[index]
-                    guard session.tool == .antigravity,
-                          !session.isDemoSession,
-                          let jumpTarget = session.jumpTarget,
-                          jumpTarget.terminalApp.lowercased() == "antigravity" else {
-                        return false
-                    }
-                    return normalizedPathForMatching(jumpTarget.workingDirectory) == processCWD
-                })
-                .max(by: { sessions[$0].updatedAt < sessions[$1].updatedAt }) else {
-                continue
+            let workspaceCandidates = sessions.indices.filter { index in
+                pseudoTerminalSession(index)
+                    && normalizedPathForMatching(sessions[index].jumpTarget?.workingDirectory) == processCWD
             }
+
+            let index: Int?
+            if !workspaceCandidates.isEmpty {
+                index = workspaceCandidates.max(by: { sessions[$0].updatedAt < sessions[$1].updatedAt })
+            } else {
+                // Some runs (piped prompts, headless modes) never record a
+                // workspace in history.jsonl, leaving the session without a
+                // workingDirectory to match. Mirror the liveness matcher's
+                // single-candidate fallback and adopt the cwd along with
+                // the terminal identity.
+                let workspaceLessCandidates = sessions.indices.filter { index in
+                    pseudoTerminalSession(index)
+                        && normalizedPathForMatching(sessions[index].jumpTarget?.workingDirectory) == nil
+                }
+                index = workspaceLessCandidates.count == 1 ? workspaceLessCandidates.first : nil
+            }
+
+            guard let index else { continue }
+            claimedSessionIDs.insert(sessions[index].id)
 
             guard var jumpTarget = sessions[index].jumpTarget else { continue }
 
@@ -1398,6 +1420,12 @@ final class ProcessMonitoringCoordinator {
                !processTTY.isEmpty,
                jumpTarget.terminalTTY != processTTY {
                 jumpTarget.terminalTTY = processTTY
+                adopted = true
+            }
+            if normalizedPathForMatching(jumpTarget.workingDirectory) == nil,
+               let processWorkingDirectory = process.workingDirectory {
+                jumpTarget.workingDirectory = processWorkingDirectory
+                jumpTarget.workspaceName = WorkspaceNameResolver.workspaceName(for: processWorkingDirectory)
                 adopted = true
             }
             guard adopted else { continue }
