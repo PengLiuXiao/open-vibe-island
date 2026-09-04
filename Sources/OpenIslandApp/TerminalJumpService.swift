@@ -360,18 +360,19 @@ struct TerminalJumpService {
                 try openAction(["-b", "com.anthropic.claudefordesktop"])
                 return "Activated Claude."
             case "dev.zcode.app":
-                // ZCode.app has no per-conversation deep link either, but its
-                // own Finder integration routes workspace opens through the
-                // `zcode://workspace/open` URL scheme, which activates the
-                // app AND focuses the workspace holding the conversation.
-                // The generic file-open path (`open -b <id> <dir>`) is broken
-                // in ZCode — it dumps the path into the app's search field.
-                if let workingDirectory = target.workingDirectory,
-                   FileManager.default.fileExists(atPath: workingDirectory),
-                   let encoded = Self.urlQueryEncodedPath(workingDirectory) {
-                    try openAction(["zcode://workspace/open?path=\(encoded)"])
-                    return "Focused the ZCode workspace."
-                }
+                // ZCode.app hosts conversations in-app with no per-conversation
+                // deep link. The zcode://workspace/open URL scheme (ZCode's own
+                // Finder-integration route, tried in #13) is not shippable: its
+                // behavior is state-dependent — sometimes it switches to the
+                // workspace's "new task" view, sometimes it does nothing, and
+                // for workspace paths ZCode doesn't recognize it pops a folder
+                // trust confirmation on every activation. The generic file-open
+                // path (`open -b <id> <dir>`) is also broken (the path lands in
+                // ZCode's search field). AX navigation is blocked upstream too:
+                // Electron exposes only a shallow accessibility tree (82 nodes
+                // via the direct AX API, 0 via System Events) unless queried
+                // from a privileged host. So: plain activation, same contract
+                // as Claude Desktop.
                 try openAction(["-b", "dev.zcode.app"])
                 return "Activated ZCode."
             case "com.googlecode.iterm2":
@@ -1226,13 +1227,6 @@ struct TerminalJumpService {
         preferredName
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
-    }
-
-    /// JavaScript `encodeURIComponent` semantics (everything but the RFC 3986
-    /// unreserved set percent-encoded), matching what ZCode's own Finder
-    /// integration produces for `zcode://workspace/open?path=…`.
-    private static func urlQueryEncodedPath(_ path: String) -> String? {
-        path.addingPercentEncoding(withAllowedCharacters: CharacterSet(charactersIn: "-._~"))
     }
 
     private func isInstalled(descriptor: TerminalAppDescriptor) -> Bool {
