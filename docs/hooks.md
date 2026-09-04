@@ -355,6 +355,13 @@ metadata (title from the summaries DB, workspace from history) but never
 flips a hook-completed session back to running, and jump targets merge
 field-by-field instead of wholesale.
 
+Passive sessions carry the pseudo terminal name `"Antigravity"`; the
+process monitor adopts the workspace-matched live `agy` process's TTY and
+terminal app into the session's jump target, so clicking a session focuses
+the terminal actually running the CLI. Jump resolution never falls back to
+an arbitrary installed terminal for unrecognized names — such targets
+reveal the workspace in Finder instead of opening a fresh terminal window.
+
 ---
 
 ## ZCode Hooks (`--source zcode`)

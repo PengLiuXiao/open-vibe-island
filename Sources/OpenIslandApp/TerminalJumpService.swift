@@ -1205,32 +1205,27 @@ struct TerminalJumpService {
     private func resolveTerminalApp(preferredName: String) -> TerminalAppDescriptor? {
         let normalized = normalizeTerminalAppName(preferredName)
 
-        // "Unknown" is the hook-side sentinel meaning "we could not classify this
-        // terminal". Returning nil here lets jump() fall through to the Finder
-        // cwd fallback instead of silently activating the first installed
-        // known terminal — the historical behavior that caused Warp sessions to
-        // open Terminal.app (or worse, iTerm) windows.
-        if normalized == "unknown" {
-            return nil
-        }
-
         if let exact = Self.knownApps.first(where: { descriptor in
             descriptor.displayName.lowercased() == normalized || descriptor.aliases.contains(normalized)
         }) {
             return exact
         }
 
-        return Self.knownApps.first(where: isInstalled(descriptor:))
+        // Anything else — the "Unknown" hook-side sentinel, but also
+        // pseudo-names that are agent labels rather than terminals (e.g.
+        // Antigravity CLI sessions discovered passively carry terminalApp
+        // "Antigravity") — gets nil so jump() falls through to the Finder
+        // cwd fallback. There used to be a "first installed known app"
+        // fallback here; it silently activated the wrong terminal and
+        // caused Warp/Antigravity sessions to open Terminal.app (or worse,
+        // iTerm) windows.
+        return nil
     }
 
     private func normalizeTerminalAppName(_ preferredName: String) -> String {
         preferredName
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
-    }
-
-    private func isInstalled(descriptor: TerminalAppDescriptor) -> Bool {
-        descriptor.allBundleIdentifiers.contains { applicationResolver($0) != nil }
     }
 
     private func preferredBundleIdentifierForAlias(
