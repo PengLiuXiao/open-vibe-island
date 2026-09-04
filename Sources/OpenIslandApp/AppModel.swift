@@ -145,6 +145,11 @@ final class AppModel {
     var zcodeHookStatus: ZCodeHookInstallationStatus? { hooks.zcodeHookStatus }
     var zcodeHookStatusTitle: String { hooks.zcodeHookStatusTitle }
     var zcodeHookStatusSummary: String { hooks.zcodeHookStatusSummary }
+    var antigravityHooksInstalled: Bool { hooks.antigravityHooksInstalled }
+    var isAntigravityHookSetupBusy: Bool { hooks.isAntigravityHookSetupBusy }
+    var antigravityHookStatus: AntigravityHookInstallationStatus? { hooks.antigravityHookStatus }
+    var antigravityHookStatusTitle: String { hooks.antigravityHookStatusTitle }
+    var antigravityHookStatusSummary: String { hooks.antigravityHookStatusSummary }
     var codexHookStatusTitle: String { hooks.codexHookStatusTitle }
     var codexHookStatusSummary: String { hooks.codexHookStatusSummary }
 
@@ -172,6 +177,7 @@ final class AppModel {
             || hooks.geminiHooksInstalled
             || hooks.kimiHooksInstalled
             || hooks.zcodeHooksInstalled
+            || hooks.antigravityHooksInstalled
     }
     func refreshCodexHookStatus() { hooks.refreshCodexHookStatus() }
     func refreshClaudeHookStatus() { hooks.refreshClaudeHookStatus() }
@@ -205,6 +211,9 @@ final class AppModel {
     func refreshZcodeHookStatus() { hooks.refreshZcodeHookStatus() }
     func installZcodeHooks() { hooks.installZcodeHooks() }
     func uninstallZcodeHooks() { hooks.uninstallZcodeHooks() }
+    func refreshAntigravityHookStatus() { hooks.refreshAntigravityHookStatus() }
+    func installAntigravityHooks() { hooks.installAntigravityHooks() }
+    func uninstallAntigravityHooks() { hooks.uninstallAntigravityHooks() }
     func installClaudeUsageBridge() { hooks.installClaudeUsageBridge() }
     func uninstallClaudeUsageBridge() { hooks.uninstallClaudeUsageBridge() }
     func updateClaudeConfigDirectory(to newDirectory: URL?) { hooks.updateClaudeConfigDirectory(to: newDirectory) }
@@ -1805,6 +1814,7 @@ final class AppModel {
                 if self.hooks.shouldAutoInstall(.gemini) { self.installGeminiHooks() }
                 if self.hooks.shouldAutoInstall(.kimi) { self.installKimiHooks() }
                 if self.hooks.shouldAutoInstall(.zcode) { self.installZcodeHooks() }
+                if self.hooks.shouldAutoInstall(.antigravity) { self.installAntigravityHooks() }
                 if self.hooks.shouldAutoInstall(.claudeUsageBridge) { self.installClaudeUsageBridge() }
 
                 // Run health checks after install to detect stale paths, conflicts, etc.

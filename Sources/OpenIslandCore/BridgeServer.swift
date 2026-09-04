@@ -477,6 +477,9 @@ public final class BridgeServer: @unchecked Sendable {
 
         case let .processGeminiHook(payload):
             handleGeminiHook(payload, from: clientID)
+
+        case let .processAntigravityHook(payload):
+            handleAntigravityHook(payload, from: clientID)
         }
     }
 
@@ -1471,6 +1474,107 @@ public final class BridgeServer: @unchecked Sendable {
                 GeminiSessionMetadataUpdated(
                     sessionID: payload.sessionID,
                     geminiMetadata: merged,
+                    timestamp: .now
+                )
+            )
+        )
+    }
+
+    // MARK: - Antigravity CLI hooks
+
+    private func handleAntigravityHook(_ payload: AntigravityHookPayload, from clientID: UUID) {
+        guard let eventName = payload.hookEventName else {
+            send(.response(.acknowledged), to: clientID)
+            return
+        }
+
+        switch eventName {
+        case .preInvocation, .postInvocation:
+            ensureAntigravitySessionExists(for: payload)
+            synchronizeAntigravityJumpTarget(for: payload)
+            emit(
+                .activityUpdated(
+                    SessionActivityUpdated(
+                        sessionID: payload.conversationId,
+                        summary: payload.implicitSummary,
+                        phase: .running,
+                        timestamp: .now
+                    )
+                )
+            )
+            send(.response(.acknowledged), to: clientID)
+
+        case .preToolUse, .postToolUse:
+            ensureAntigravitySessionExists(for: payload)
+            synchronizeAntigravityJumpTarget(for: payload)
+            emit(
+                .activityUpdated(
+                    SessionActivityUpdated(
+                        sessionID: payload.conversationId,
+                        summary: payload.implicitSummary,
+                        phase: .running,
+                        timestamp: .now
+                    )
+                )
+            )
+            send(.response(.acknowledged), to: clientID)
+
+        case .stop:
+            ensureAntigravitySessionExists(for: payload)
+            synchronizeAntigravityJumpTarget(for: payload)
+            emit(
+                .sessionCompleted(
+                    SessionCompleted(
+                        sessionID: payload.conversationId,
+                        summary: payload.implicitSummary,
+                        timestamp: .now
+                    )
+                )
+            )
+            send(.response(.acknowledged), to: clientID)
+        }
+    }
+
+    private func ensureAntigravitySessionExists(for payload: AntigravityHookPayload) {
+        guard !hasSession(id: payload.conversationId) else {
+            return
+        }
+
+        emit(
+            .sessionStarted(
+                SessionStarted(
+                    sessionID: payload.conversationId,
+                    title: payload.sessionTitle,
+                    tool: .antigravity,
+                    origin: .live,
+                    initialPhase: .completed,
+                    summary: payload.implicitSummary,
+                    timestamp: .now,
+                    jumpTarget: payload.defaultJumpTarget
+                )
+            )
+        )
+    }
+
+    private func synchronizeAntigravityJumpTarget(for payload: AntigravityHookPayload) {
+        guard let existingSession = localState.session(id: payload.conversationId) else {
+            return
+        }
+
+        let jumpTarget = Self.mergeJumpTargetPreservingExistingResolvedFields(
+            incoming: payload.defaultJumpTarget,
+            existing: existingSession.jumpTarget
+        )
+
+        guard existingSession.jumpTarget != jumpTarget else {
+            return
+        }
+
+        emit(
+            .jumpTargetUpdated(
+                JumpTargetUpdated(
+                    sessionID: payload.conversationId,
+                    jumpTarget: jumpTarget,
                     timestamp: .now
                 )
             )

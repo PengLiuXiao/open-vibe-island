@@ -247,9 +247,19 @@ final class SessionDiscoveryCoordinator {
         var merged = existing
         let discoveredIsNewer = discovered.updatedAt >= existing.updatedAt
 
+        // A hook-managed Antigravity session gets its lifecycle from hook
+        // events (Stop → completed, PreInvocation → running). The passive
+        // scan keeps seeing a fresh conversation-DB mtime for up to its
+        // idle timeout after a turn ends, which would otherwise flip a
+        // completed session back to "running" while the user reads output.
+        let suppressPassivePhaseRevive = existing.isHookManaged
+            && existing.tool == .antigravity
+            && existing.phase == .completed
+            && discovered.phase == .running
+
         if discoveredIsNewer {
             merged.title = discovered.title
-            merged.phase = discovered.phase
+            merged.phase = suppressPassivePhaseRevive ? existing.phase : discovered.phase
             merged.summary = discovered.summary
             merged.updatedAt = discovered.updatedAt
             merged.permissionRequest = discovered.permissionRequest
@@ -258,7 +268,7 @@ final class SessionDiscoveryCoordinator {
 
         merged.origin = existing.origin ?? discovered.origin
         merged.attachmentState = mergeAttachmentState(existing.attachmentState, discovered.attachmentState)
-        merged.jumpTarget = existing.jumpTarget ?? discovered.jumpTarget
+        merged.jumpTarget = mergeJumpTargetFillingGaps(existing: existing.jumpTarget, discovered: discovered.jumpTarget)
         merged.codexMetadata = mergeCodexMetadata(existing.codexMetadata, discovered.codexMetadata)
         merged.claudeMetadata = mergeClaudeMetadata(existing.claudeMetadata, discovered.claudeMetadata)
         merged.openCodeMetadata = mergeOpenCodeMetadata(existing.openCodeMetadata, discovered.openCodeMetadata)
@@ -267,6 +277,38 @@ final class SessionDiscoveryCoordinator {
         // (hook or rediscovery), preserve that flag so liveness uses the
         // app-level check instead of subprocess polling.
         merged.isCodexAppSession = existing.isCodexAppSession || discovered.isCodexAppSession
+
+        return merged
+    }
+
+    /// Keeps the existing jump target's resolved fields and lets the
+    /// discovered one fill only the gaps. A wholesale `existing ?? discovered`
+    /// would permanently pin a workspace-less hook target (created before the
+    /// passive scan found the workspace) and vice versa.
+    private func mergeJumpTargetFillingGaps(existing: JumpTarget?, discovered: JumpTarget?) -> JumpTarget? {
+        guard var merged = existing ?? discovered else {
+            return nil
+        }
+
+        guard let discovered else {
+            return merged
+        }
+
+        if merged.workspaceName.isEmpty {
+            merged.workspaceName = discovered.workspaceName
+        }
+        if merged.paneTitle.isEmpty {
+            merged.paneTitle = discovered.paneTitle
+        }
+        if (merged.workingDirectory ?? "").isEmpty {
+            merged.workingDirectory = discovered.workingDirectory
+        }
+        if (merged.terminalSessionID ?? "").isEmpty {
+            merged.terminalSessionID = discovered.terminalSessionID
+        }
+        if (merged.terminalTTY ?? "").isEmpty {
+            merged.terminalTTY = discovered.terminalTTY
+        }
 
         return merged
     }

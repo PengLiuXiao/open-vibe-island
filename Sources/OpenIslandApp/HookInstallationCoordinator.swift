@@ -23,6 +23,7 @@ final class HookInstallationCoordinator {
     var geminiHookStatus: GeminiHookInstallationStatus?
     var kimiHookStatus: KimiHookInstallationStatus?
     var zcodeHookStatus: ZCodeHookInstallationStatus?
+    var antigravityHookStatus: AntigravityHookInstallationStatus?
     var claudeStatusLineStatus: ClaudeStatusLineInstallationStatus?
     var claudeUsageSnapshot: ClaudeUsageSnapshot?
     var codexUsageSnapshot: CodexUsageSnapshot?
@@ -38,6 +39,7 @@ final class HookInstallationCoordinator {
     var isGeminiHookSetupBusy = false
     var isKimiHookSetupBusy = false
     var isZcodeHookSetupBusy = false
+    var isAntigravityHookSetupBusy = false
     var isClaudeUsageSetupBusy = false
 
     @ObservationIgnored
@@ -95,6 +97,9 @@ final class HookInstallationCoordinator {
 
     @ObservationIgnored
     private let zcodeHookInstallationManager = ZCodeHookInstallationManager()
+
+    @ObservationIgnored
+    private let antigravityHookInstallationManager = AntigravityHookInstallationManager()
 
     /// Computed so it always reflects the latest `ClaudeConfigDirectory` setting.
     private var claudeStatusLineInstallationManager: ClaudeStatusLineInstallationManager {
@@ -161,6 +166,13 @@ final class HookInstallationCoordinator {
         // shell-quoted path ZCode cannot execute) counts as not installed so
         // startup auto-install rewrites it as `process`-type entries.
         zcodeHookStatus?.currentFormatHooksPresent == true
+    }
+
+    var antigravityHooksInstalled: Bool {
+        // Complete installs only: a partial or stale entry set (older binary
+        // path, missing event) counts as not installed so startup
+        // auto-install rewrites it.
+        antigravityHookStatus?.completeManagedHooksPresent == true
     }
 
     var claudeUsageInstalled: Bool {
@@ -422,6 +434,34 @@ final class HookInstallationCoordinator {
         }
 
         return "no managed ZCode hooks"
+    }
+
+    var antigravityHookStatusTitle: String {
+        if antigravityHooksInstalled {
+            return "Antigravity hooks installed"
+        }
+
+        if hooksBinaryURL == nil {
+            return "Hook binary not found"
+        }
+
+        return "Antigravity hooks not installed"
+    }
+
+    var antigravityHookStatusSummary: String {
+        guard antigravityHookStatus != nil else {
+            return "Reading ~/.gemini/config/hooks.json."
+        }
+
+        if antigravityHooksInstalled {
+            return "managed hooks present"
+        }
+
+        if hooksBinaryURL == nil {
+            return "Build OpenIslandHooks before installing."
+        }
+
+        return "no managed Antigravity hooks"
     }
 
     var codexHookStatusTitle: String {
@@ -745,6 +785,16 @@ final class HookInstallationCoordinator {
                     self.onStatusMessage?("Failed to read ZCode hook status: \(error.localizedDescription)")
                 }
             }
+
+            group.addTask { @MainActor [weak self] in
+                guard let self else { return }
+                do {
+                    let status = try self.antigravityHookInstallationManager.status(hooksBinaryURL: self.hooksBinaryURL)
+                    self.antigravityHookStatus = status
+                } catch {
+                    self.onStatusMessage?("Failed to read Antigravity hook status: \(error.localizedDescription)")
+                }
+            }
         }
     }
 
@@ -809,6 +859,19 @@ final class HookInstallationCoordinator {
                 self.zcodeHookStatus = status
             } catch {
                 self.onStatusMessage?("Failed to read ZCode hook status: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    func refreshAntigravityHookStatus() {
+        Task { [weak self] in
+            guard let self else { return }
+
+            do {
+                let status = try self.antigravityHookInstallationManager.status(hooksBinaryURL: self.hooksBinaryURL)
+                self.antigravityHookStatus = status
+            } catch {
+                self.onStatusMessage?("Failed to read Antigravity hook status: \(error.localizedDescription)")
             }
         }
     }
@@ -884,9 +947,7 @@ final class HookInstallationCoordinator {
         case .gemini: return !geminiHooksInstalled
         case .kimi: return !kimiHooksInstalled
         case .zcode: return !zcodeHooksInstalled
-        // Antigravity is passively discovered; Open Island manages no
-        // hooks for it, so there is never anything to auto-install.
-        case .antigravity: return false
+        case .antigravity: return !antigravityHooksInstalled
         case .claudeUsageBridge: return !claudeUsageInstalled
         }
     }
@@ -912,8 +973,7 @@ final class HookInstallationCoordinator {
             case .gemini: return geminiHooksInstalled
             case .kimi: return kimiHooksInstalled
             case .zcode: return zcodeHooksInstalled
-            // No managed hooks → never observed as installed.
-            case .antigravity: return false
+            case .antigravity: return antigravityHooksInstalled
             case .claudeUsageBridge: return claudeUsageInstalled
             }
         }
@@ -1138,6 +1198,23 @@ final class HookInstallationCoordinator {
 
     func uninstallZcodeHooks() {
         updateZcodeHooks(userMessage: "Removing ZCode hooks.", intent: .uninstalled) { manager in
+            try manager.uninstall()
+        }
+    }
+
+    func installAntigravityHooks() {
+        guard let hooksBinaryURL else {
+            onStatusMessage?("Could not find a local OpenIslandHooks binary. Build the package first.")
+            return
+        }
+
+        updateAntigravityHooks(userMessage: "Installing Antigravity hooks.", intent: .installed) { manager in
+            try manager.install(hooksBinaryURL: hooksBinaryURL)
+        }
+    }
+
+    func uninstallAntigravityHooks() {
+        updateAntigravityHooks(userMessage: "Removing Antigravity hooks.", intent: .uninstalled) { manager in
             try manager.uninstall()
         }
     }
@@ -1381,6 +1458,34 @@ final class HookInstallationCoordinator {
                 }
             } catch {
                 self.onStatusMessage?("ZCode hook update failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func updateAntigravityHooks(
+        userMessage: String,
+        intent: AgentHookIntent,
+        operation: @escaping (AntigravityHookInstallationManager) throws -> AntigravityHookInstallationStatus
+    ) {
+        isAntigravityHookSetupBusy = true
+        onStatusMessage?(userMessage)
+
+        Task { [weak self] in
+            guard let self else { return }
+
+            defer { self.isAntigravityHookSetupBusy = false }
+
+            do {
+                let status = try operation(self.antigravityHookInstallationManager)
+                self.antigravityHookStatus = status
+                self.intentStore.setIntent(intent, for: .antigravity)
+                if status.managedHooksPresent {
+                    self.onStatusMessage?("Antigravity hooks are installed. agy sessions started afterwards will report to the island.")
+                } else {
+                    self.onStatusMessage?("Antigravity hooks are not installed. Sessions keep being discovered passively.")
+                }
+            } catch {
+                self.onStatusMessage?("Antigravity hook update failed: \(error.localizedDescription)")
             }
         }
     }
