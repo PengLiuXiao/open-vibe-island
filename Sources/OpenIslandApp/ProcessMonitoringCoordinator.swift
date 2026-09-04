@@ -254,6 +254,7 @@ final class ProcessMonitoringCoordinator {
         // Adopt process TTYs inline on local copy.
         adoptProcessTTYsForClaudeSessions(activeProcesses: activeProcesses, sessions: &local)
         adoptProcessTTYsForCursorSessions(activeProcesses: activeProcesses, sessions: &local)
+        adoptProcessTTYsForAntigravitySessions(activeProcesses: activeProcesses, sessions: &local)
 
         // Detect Codex.app running state BEFORE the empty-sessions early
         // return — we need to fire the callback on a brand-new Codex.app
@@ -1320,6 +1321,117 @@ final class ProcessMonitoringCoordinator {
             sessions[index].attachmentState = .attached
             sessions[index].isProcessAlive = true
             sessions[index].processNotSeenCount = 0
+            sessions[index].updatedAt = .now
+            changed = true
+        }
+
+        if changed {
+            localState = SessionState(sessions: sessions)
+        }
+        return changed
+    }
+
+    /// Passively discovered Antigravity sessions carry the pseudo terminal
+    /// name `"Antigravity"` (the discovery has no terminal context), which
+    /// made jumps resolve to an arbitrary installed terminal and open a
+    /// fresh window. Adopt the terminal identity of the workspace-matched
+    /// live `agy` process so jumps focus the terminal actually running the
+    /// CLI. Hook-managed sessions already carry a real terminal and are
+    /// left untouched.
+    @discardableResult
+    private func adoptProcessTTYsForAntigravitySessions(
+        activeProcesses: [ActiveProcessSnapshot],
+        sessions localState: inout SessionState
+    ) -> Bool {
+        let antigravityProcesses = activeProcesses.filter { $0.tool == .antigravity }
+        guard !antigravityProcesses.isEmpty else { return false }
+
+        var sessions = localState.sessions
+        var changed = false
+        var claimedSessionIDs: Set<String> = []
+
+        for process in antigravityProcesses {
+            guard let processCWD = normalizedPathForMatching(process.workingDirectory) else { continue }
+            let hasProcessTTY = process.terminalTTY.map(normalizedTTYForMatching) != nil
+            let hasProcessTerminalApp = !(process.terminalApp ?? "").isEmpty
+            guard hasProcessTTY || hasProcessTerminalApp else { continue }
+
+            let pseudoTerminalSession = { (index: Int) -> Bool in
+                let session = sessions[index]
+                guard session.tool == .antigravity,
+                      !session.isDemoSession,
+                      !claimedSessionIDs.contains(session.id),
+                      let jumpTarget = session.jumpTarget,
+                      jumpTarget.terminalApp.lowercased() == "antigravity" else {
+                    return false
+                }
+                return true
+            }
+
+            // Mirror the liveness matcher: at most one session per process,
+            // preferring the most recently updated workspace candidate.
+            let workspaceCandidates = sessions.indices.filter { index in
+                pseudoTerminalSession(index)
+                    && normalizedPathForMatching(sessions[index].jumpTarget?.workingDirectory) == processCWD
+            }
+
+            let index: Int?
+            if !workspaceCandidates.isEmpty {
+                index = workspaceCandidates.max(by: { sessions[$0].updatedAt < sessions[$1].updatedAt })
+            } else {
+                // Some runs (piped prompts, headless modes) never record a
+                // workspace in history.jsonl, leaving the session without a
+                // workingDirectory to match. Mirror the liveness matcher's
+                // single-candidate fallback and adopt the cwd along with
+                // the terminal identity.
+                let workspaceLessCandidates = sessions.indices.filter { index in
+                    pseudoTerminalSession(index)
+                        && normalizedPathForMatching(sessions[index].jumpTarget?.workingDirectory) == nil
+                }
+                index = workspaceLessCandidates.count == 1 ? workspaceLessCandidates.first : nil
+            }
+
+            guard let index else { continue }
+            claimedSessionIDs.insert(sessions[index].id)
+
+            guard var jumpTarget = sessions[index].jumpTarget else { continue }
+
+            // Don't steal a TTY another antigravity session already owns
+            // (two agy processes in one workspace): mirror the Claude
+            // adoption guard.
+            if let processTTY = process.terminalTTY {
+                let normalized = normalizedTTYForMatching(processTTY)
+                let ttyAlreadyClaimed = sessions.contains { other in
+                    other.id != sessions[index].id
+                        && other.tool == .antigravity
+                        && normalizedTTYForMatching(other.jumpTarget?.terminalTTY) == normalized
+                }
+                guard !ttyAlreadyClaimed else { continue }
+            }
+
+            var adopted = false
+            if let processTerminalApp = process.terminalApp,
+               !processTerminalApp.isEmpty,
+               jumpTarget.terminalApp != processTerminalApp {
+                jumpTarget.terminalApp = processTerminalApp
+                adopted = true
+            }
+            if let processTTY = process.terminalTTY,
+               !processTTY.isEmpty,
+               jumpTarget.terminalTTY != processTTY {
+                jumpTarget.terminalTTY = processTTY
+                adopted = true
+            }
+            if normalizedPathForMatching(jumpTarget.workingDirectory) == nil,
+               let processWorkingDirectory = process.workingDirectory {
+                jumpTarget.workingDirectory = processWorkingDirectory
+                jumpTarget.workspaceName = WorkspaceNameResolver.workspaceName(for: processWorkingDirectory)
+                adopted = true
+            }
+            guard adopted else { continue }
+
+            sessions[index].jumpTarget = jumpTarget
+            sessions[index].attachmentState = .attached
             sessions[index].updatedAt = .now
             changed = true
         }

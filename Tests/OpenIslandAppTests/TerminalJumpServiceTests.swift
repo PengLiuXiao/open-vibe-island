@@ -358,6 +358,41 @@ struct TerminalJumpServiceTests {
     }
 
     @Test
+    func antigravityPseudoTerminalNameFallsBackToFinderInsteadOfOpeningTerminal() throws {
+        let openedArguments = OpenedArgumentsBox()
+        // Passive Antigravity discovery labels jump targets with the
+        // pseudo-name "Antigravity". Before the fallback was removed this
+        // resolved to the first installed known terminal (Terminal.app on
+        // stock macOS) and clicking a session opened a fresh terminal
+        // window via `open -b com.apple.Terminal <dir>`.
+        let service = TerminalJumpService(
+            applicationResolver: { bundleIdentifier in
+                bundleIdentifier == "com.apple.Terminal" ? URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app") : nil
+            },
+            appRunningChecker: { _ in false },
+            openAction: { arguments in
+                openedArguments.values.append(arguments)
+            },
+            appleScriptRunner: { _ in "" }
+        )
+
+        let result = try service.jump(
+            to: JumpTarget(
+                terminalApp: "Antigravity",
+                workspaceName: "tmp",
+                paneTitle: "",
+                workingDirectory: "/tmp"
+            )
+        )
+
+        #expect(openedArguments.values == [["/tmp"]])
+        #expect(
+            result.contains("Finder"),
+            "Expected Finder fallback, got: \(result)"
+        )
+    }
+
+    @Test
     func traeJumpActivatesRunningTraeCNApp() throws {
         let openedArguments = OpenedArgumentsBox()
         let service = TerminalJumpService(
