@@ -307,6 +307,56 @@ Setting `interrupt: true` terminates the current agent turn immediately.
 
 ---
 
+## Antigravity CLI Hooks (`--source antigravity`)
+
+**Payload type**: `AntigravityHookPayload` (dedicated decode path)  
+**Source**: [`Sources/OpenIslandCore/AntigravityHooks.swift`](../Sources/OpenIslandCore/AntigravityHooks.swift)
+
+The Antigravity CLI (`agy`) publishes its own hook protocol. Unlike Claude
+Code and Gemini CLI, a payload does not identify its own event and carries no
+`cwd`; the event travels through the `--event` CLI argument (each event is a
+separate command entry) and the workspace is recovered from the parent `agy`
+process via `lsof`, with `workspacePaths` as a fallback when populated.
+
+### Configuration file
+
+agy reads hooks from the shared customization config
+`~/.gemini/config/hooks.json` — a JSON object of named hook groups. Open
+Island owns the `"open-island"` group and leaves every other group untouched.
+`PreToolUse`/`PostToolUse` handlers sit behind a `matcher` regex group;
+`PreInvocation`/`Stop` handlers form flat lists. Handler `command` strings run
+through `sh -c`, so the binary path is single-quoted. agy loads `hooks.json`
+at process start: installs only affect sessions launched afterwards.
+
+### Managed events
+
+| Event | Mapping in Open Island |
+| :--- | :--- |
+| `PreInvocation` | Creates (if new) the session keyed by `conversationId` and marks it running |
+| `PreToolUse` | Live activity update from `toolCall` (`toolSummary`/`CommandLine`) |
+| `PostToolUse` | Activity update with tool outcome (`error` empty string = success) |
+| `Stop` | Turn completed → completion card |
+
+`PostInvocation` is deliberately not installed (low-noise footprint), and
+agy has no session-end event — retirement relies on the passive discovery
+idle timeout and process liveness.
+
+### Stdout contract (important)
+
+`PreToolUse` entries must write **nothing** to stdout: agy treats a JSON
+object without a `decision` field as a deny, while empty output falls through
+to the normal permission flow. All other managed events acknowledge with `{}`.
+
+### Coexistence with passive discovery
+
+Hook sessions and passively discovered sessions share the `conversationId`
+key, so they merge into one row. The passive scan refreshes presentation
+metadata (title from the summaries DB, workspace from history) but never
+flips a hook-completed session back to running, and jump targets merge
+field-by-field instead of wholesale.
+
+---
+
 ## ZCode Hooks (`--source zcode`)
 
 **Payload type**: `ClaudeHookPayload` (shared decode path, like the Claude Code forks)  
@@ -445,11 +495,12 @@ For iTerm, Terminal, and Ghostty the process additionally runs an AppleScript qu
 
 Antigravity (`agy`) shares the `~/.gemini` root directory with Gemini CLI but
 nothing else: its settings live in `~/.gemini/antigravity-cli/settings.json`
-and its hooks are Claude-style (`PreToolUse` / `PostToolUse` / `Stop` in a
-dedicated `hooks.json`), not Gemini CLI's `SessionStart` / `BeforeAgent` /
-`AfterAgent` / `SessionEnd` vocabulary. Because that hook schema is not yet
-verified against a logged-in CLI, Open Island does **not** write any
-Antigravity configuration. Instead it discovers sessions passively:
+and its hooks use a dedicated named-group `hooks.json` (see
+[Antigravity CLI Hooks](#antigravity-cli-hooks---source-antigravity)), not
+Gemini CLI's `SessionStart` / `BeforeAgent` / `AfterAgent` / `SessionEnd`
+vocabulary. Active hook ingestion ships alongside passive discovery; the
+passive layer stays valuable because it works with no configuration and
+covers sessions started before an install:
 
 | Source | Used for |
 |---|---|

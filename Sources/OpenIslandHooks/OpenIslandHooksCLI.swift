@@ -19,12 +19,13 @@ struct OpenIslandHooksCLI {
         case gemini
         case kimi
         case zcode
+        case antigravity
 
         var isClaudeFormat: Bool {
             switch self {
             case .claude, .qoder, .qwen, .factory, .droid, .codebuddy, .kimi, .zcode:
                 return true
-            case .codex, .cursor, .gemini:
+            case .codex, .cursor, .gemini, .antigravity:
                 return false
             }
         }
@@ -108,6 +109,28 @@ struct OpenIslandHooksCLI {
                     .withRuntimeContext(environment: ProcessInfo.processInfo.environment)
 
                 _ = try? client.send(.processGeminiHook(payload), timeout: 45)
+            case .antigravity:
+                // agy's payload does not name its own event — each event is a
+                // separate command entry in hooks.json, so the event travels
+                // via the `--event` argument instead.
+                guard let eventName = hookEventName(arguments: arguments) else {
+                    return
+                }
+
+                var payload = try decoder.decode(AntigravityHookPayload.self, from: input)
+                payload.hookEventName = eventName
+                payload = payload.withRuntimeContext(environment: ProcessInfo.processInfo.environment)
+
+                _ = try? client.send(.processAntigravityHook(payload), timeout: 45)
+
+                // PreToolUse must stay silent: agy treats a stdout JSON
+                // object without a `decision` field as a deny, while empty
+                // output falls through to the normal permission flow. Every
+                // other event is acknowledged with the empty object the
+                // protocol expects.
+                if eventName != .preToolUse {
+                    FileHandle.standardOutput.write(Data("{}\n".utf8))
+                }
             }
         } catch {
             // Hooks should fail open so the CLI continues working even if the bridge is unavailable.
@@ -138,6 +161,19 @@ struct OpenIslandHooksCLI {
         while index < arguments.count {
             if arguments[index] == "--source", index + 1 < arguments.count {
                 return arguments[index + 1]
+            }
+
+            index += 1
+        }
+
+        return nil
+    }
+
+    private static func hookEventName(arguments: [String]) -> AntigravityHookEventName? {
+        var index = 0
+        while index < arguments.count {
+            if arguments[index] == "--event", index + 1 < arguments.count {
+                return AntigravityHookEventName(rawValue: arguments[index + 1])
             }
 
             index += 1
